@@ -49,6 +49,44 @@ optional_u64_from_truthy(p99_truthy_t ok, uint64_t value)
 }
 
 static PyObject*
+optional_u64_from_out_param(
+    p99_truthy_t (*query)(p99_histogram_t const*, uint64_t*),
+    HistogramObject* self
+)
+{
+    uint64_t value;
+    p99_truthy_t ok = query(&self->histogram, &value);
+
+    return optional_u64_from_truthy(ok, value);
+}
+
+static PyObject*
+optional_u64_from_out_param_index(
+    p99_truthy_t (*query)(p99_histogram_t const*, size_t, uint64_t*),
+    HistogramObject* self,
+    size_t index
+)
+{
+    uint64_t value;
+    p99_truthy_t ok = query(&self->histogram, index, &value);
+
+    return optional_u64_from_truthy(ok, value);
+}
+
+static PyObject*
+optional_u64_from_out_param_percentile(
+    p99_truthy_t (*query)(p99_histogram_t const*, double, uint64_t*),
+    HistogramObject* self,
+    double percentile
+)
+{
+    uint64_t value;
+    p99_truthy_t ok = query(&self->histogram, percentile, &value);
+
+    return optional_u64_from_truthy(ok, value);
+}
+
+static PyObject*
 histogram_push_ns(HistogramObject* self, PyObject* args)
 {
     unsigned long long time_in_ns;
@@ -123,12 +161,7 @@ histogram_get_has_overflowed(HistogramObject* self, void* Py_UNUSED(closure))
 static PyObject*
 histogram_event_time_total(HistogramObject* self, PyObject* Py_UNUSED(ignored))
 {
-    uint64_t total;
-
-    return optional_u64_from_truthy(
-        p99_histogram_event_time_total(&self->histogram, &total),
-        total
-    );
+    return optional_u64_from_out_param(p99_histogram_event_time_total, self);
 }
 
 static PyObject*
@@ -142,38 +175,28 @@ histogram_event_time_total_raw(HistogramObject* self, PyObject* Py_UNUSED(ignore
 static PyObject*
 histogram_min_ns(HistogramObject* self, PyObject* Py_UNUSED(ignored))
 {
-    uint64_t min;
-
-    return optional_u64_from_truthy(
-        p99_histogram_min_event_time(&self->histogram, &min),
-        min
-    );
+    return optional_u64_from_out_param(p99_histogram_min_event_time, self);
 }
 
 static PyObject*
 histogram_max_ns(HistogramObject* self, PyObject* Py_UNUSED(ignored))
 {
-    uint64_t max;
-
-    return optional_u64_from_truthy(
-        p99_histogram_max_event_time(&self->histogram, &max),
-        max
-    );
+    return optional_u64_from_out_param(p99_histogram_max_event_time, self);
 }
 
 static PyObject*
 histogram_bucket_value(HistogramObject* self, PyObject* args)
 {
     Py_ssize_t index;
-    uint64_t value;
 
     if (!PyArg_ParseTuple(args, "n", &index)) {
         return NULL;
     }
 
-    return optional_u64_from_truthy(
-        p99_histogram_bucket_value(&self->histogram, (size_t)index, &value),
-        value
+    return optional_u64_from_out_param_index(
+        p99_histogram_bucket_value,
+        self,
+        (size_t)index
     );
 }
 
@@ -206,15 +229,15 @@ static PyObject*
 histogram_value_at_percentile(HistogramObject* self, PyObject* args)
 {
     double percentile;
-    uint64_t value;
 
     if (!PyArg_ParseTuple(args, "d", &percentile)) {
         return NULL;
     }
 
-    return optional_u64_from_truthy(
-        p99_histogram_value_at_percentile(&self->histogram, percentile, &value),
-        value
+    return optional_u64_from_out_param_percentile(
+        p99_histogram_value_at_percentile,
+        self,
+        percentile
     );
 }
 
@@ -222,11 +245,7 @@ histogram_value_at_percentile(HistogramObject* self, PyObject* args)
     static PyObject*                                                        \
     name(HistogramObject* self, PyObject* Py_UNUSED(ignored))               \
     {                                                                       \
-        uint64_t value;                                                     \
-        return optional_u64_from_truthy(                                    \
-            c_fn(&self->histogram, &value),                                 \
-            value                                                           \
-        );                                                                  \
+        return optional_u64_from_out_param(c_fn, self);                     \
     }
 
 HISTOGRAM_VALUE_AT_P(histogram_value_at_p50, p99_histogram_value_at_p50)
@@ -296,13 +315,17 @@ histogram_values_at_percentiles(HistogramObject* self, PyObject* args)
             return NULL;
         }
 
-        if (!p99_histogram_value_at_percentile(
+        {
+            p99_truthy_t ok = p99_histogram_value_at_percentile(
                 &self->histogram,
                 level,
                 &value
-            )) {
-            Py_DECREF(result);
-            Py_RETURN_NONE;
+            );
+
+            if (!ok) {
+                Py_DECREF(result);
+                Py_RETURN_NONE;
+            }
         }
 
         item = Py_BuildValue("(dK)", level, (unsigned long long)value);
